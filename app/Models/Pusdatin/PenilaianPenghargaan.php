@@ -27,6 +27,11 @@ class PenilaianPenghargaan extends Model
         return $this->hasMany(Parsed\PenilaianPenghargaan_Parsed::class, 'penilaian_penghargaan_id');
     }
 
+    public function uploadedBy()
+    {
+        return $this->belongsTo(\App\Models\User::class, 'uploaded_by')->select(['id', 'email']);
+    }
+
     public function Validasi1()
     {
         return $this->hasOne(Validasi1::class, 'penilaian_penghargaan_ref_id');

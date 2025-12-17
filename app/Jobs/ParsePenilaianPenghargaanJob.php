@@ -75,20 +75,33 @@ class ParsePenilaianPenghargaanJob implements ShouldQueue
                     $data = [
                         'penilaian_penghargaan_id' => $this->batch->id,
                     ];
-                    $index=0;
-                    foreach ($map as $field => $type) {
-                        // Skip nama_dinas dari Excel, akan diambil dari database
-                        if ($field === 'nama_dinas') {
-                            $index++; // Skip index untuk nama_dinas di Excel
-                            continue;
-                        }
-
-                        $data[$field] = safe(
-                            $field, 
-                            fn() => validateValue($rowValues[$index++] ?? null, $type), 
-                            $errors
-                        );
+                     
+                    $data['id_dinas'] = safe('id_dinas', fn() => validateValue($rowValues[0] ?? null, 'int'), $errors);
+                    
+                    // Skip row kosong (id_dinas null)
+                    if (!isset($data['id_dinas']) || $data['id_dinas'] === null) {
+                        return; // Skip row ini
                     }
+                    
+                    $data['Adipura_Jumlah_Wilayah'] = safe('Adipura_Jumlah_Wilayah', fn() => validateValue($rowValues[2] ?? null, 'int'), $errors);
+                    $data['Adipura_Skor_Max'] = safe('Adipura_Skor_Max', fn() => validateValue($rowValues[3] ?? null, 'int'), $errors);
+                    $data['Adipura_Skor'] = safe('Adipura_Skor', fn() => validateValue($rowValues[4] ?? null, 'int'), $errors);
+                    
+                    $data['Adiwiyata_Jumlah_Sekolah'] = safe('Adiwiyata_Jumlah_Sekolah', fn() => validateValue($rowValues[5] ?? null, 'int'), $errors);
+                    $data['Adiwiyata_Skor_Max'] = safe('Adiwiyata_Skor_Max', fn() => validateValue($rowValues[6] ?? null, 'int'), $errors);
+                    $data['Adiwiyata_Skor'] = safe('Adiwiyata_Skor', fn() => validateValue($rowValues[7] ?? null, 'int'), $errors);
+                    
+                    $data['Proklim_Jumlah_Desa'] = safe('Proklim_Jumlah_Desa', fn() => validateValue($rowValues[8] ?? null, 'int'), $errors);
+                    $data['Proklim_Skor_Max'] = safe('Proklim_Skor_Max', fn() => validateValue($rowValues[9] ?? null, 'int'), $errors);
+                    $data['Proklim_Skor'] = safe('Proklim_Skor', fn() => validateValue($rowValues[10] ?? null, 'int'), $errors);
+                    
+                    $data['Proper_Jumlah_Perusahaan'] = safe('Proper_Jumlah_Perusahaan', fn() => validateValue($rowValues[11] ?? null, 'int'), $errors);
+                    $data['Proper_Skor_Max'] = safe('Proper_Skor_Max', fn() => validateValue($rowValues[12] ?? null, 'int'), $errors);
+                    $data['Proper_Skor'] = safe('Proper_Skor', fn() => validateValue($rowValues[13] ?? null, 'int'), $errors);
+                    
+                    $data['Kalpataru_Jumlah_Penerima'] = safe('Kalpataru_Jumlah_Penerima', fn() => validateValue($rowValues[14] ?? null, 'int'), $errors);
+                    $data['Kalpataru_Skor_Max'] = safe('Kalpataru_Skor_Max', fn() => validateValue($rowValues[15] ?? null, 'int'), $errors);
+                    $data['Kalpataru_Skor'] = safe('Kalpataru_Skor', fn() => validateValue($rowValues[16] ?? null, 'int'), $errors);
                     
                     $data['Adipura_Persentase'] = safe(
                         'Adipura_Persentase', 
@@ -115,9 +128,15 @@ class ParsePenilaianPenghargaanJob implements ShouldQueue
                         fn() => $data['Kalpataru_Skor_Max'] > 0 ? ($data['Kalpataru_Skor'] / $data['Kalpataru_Skor_Max']) * 100 : 0, 
                         $errors
                     );
+                    
+                    // Hitung Total Skor menggunakan persentase (range 0-100)
                     $data['Total_Skor'] = safe(
                         'Total_Skor',  
-                        fn() => ($data['Adipura_Skor']*$bobot['Adipura']) + ($data['Adiwiyata_Skor']*$bobot['Adiwiyata']) + ($data['Proklim_Skor']*$bobot['Proklim']) + ($data['Proper_Skor']*$bobot['Proper']) + ($data['Kalpataru_Skor']*$bobot['Kalpataru']), 
+                        fn() => ($data['Adipura_Persentase'] * $bobot['Adipura']) + 
+                                ($data['Adiwiyata_Persentase'] * $bobot['Adiwiyata']) + 
+                                ($data['Proklim_Persentase'] * $bobot['Proklim']) + 
+                                ($data['Proper_Persentase'] * $bobot['Proper']) + 
+                                ($data['Kalpataru_Persentase'] * $bobot['Kalpataru']), 
                         $errors
                     );
 

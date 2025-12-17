@@ -18,7 +18,7 @@ class TabelUtama extends Model
         'updated_at',
         'catatan_admin',
     ];
-    public const MIN_COUNT=78;
+    public const MIN_COUNT=80;
     public function submission()
     {
         return $this->belongsTo(Submission::class);

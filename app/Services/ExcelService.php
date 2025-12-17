@@ -8,6 +8,7 @@ use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use PhpOffice\PhpSpreadsheet\Worksheet\Worksheet;
 use PhpOffice\PhpSpreadsheet\Writer\Xlsx;
 
+
 class ExcelService
 {
     /**
@@ -247,6 +248,13 @@ public function generateTemplatePenilaianPenghargaan(array $eligible,array $mult
 
     //SIMPAN EUY
     Storage::disk($disk)->makeDirectory(dirname($path));
+    
+    // Hapus file lama jika ada
+    if (Storage::disk($disk)->exists($path)) {
+        Storage::disk($disk)->delete($path);
+        
+    }
+    
     $fullPath = Storage::disk($disk)->path($path);
 
     $writer = new Xlsx($spreadsheet);

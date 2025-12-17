@@ -129,25 +129,40 @@ class UploadController extends Controller
         $request->validate([
             'file' => 'required|file|mimes:xls,xlsx,csv|max:5020', 
             'kode_tabel' => 'required|string',
-            'matra' => 'required|in:Keanekaragaman Hayati,Kualitas Air,Laut\, Pesisir\, dan Pantai,Kualitas Udara,Lahan dan Hutan,Pengelolaan Sampah dan Limbah,Perubahan Iklim,Risiko Bencana,Lainnya',
+            'matra' => 'required|string',
         ],[
             'file.required' => 'File tabel utama wajib diunggah.',
             'file.mimes' => 'File harus berformat XLS, XLSX, atau CSV.',
             'file.max' => 'Ukuran file maksimal 5 MB.',
             'kode_tabel.required' => 'Kode tabel wajib diisi.',
             'matra.required' => 'Matra wajib diisi.',
-            'matra.in' => 'Matra tidak valid. Pilih salah satu dari: Keanekaragaman Hayati, Kualitas Air, Laut Pesisir dan Pantai, Kualitas Udara, Lahan dan Hutan, Pengelolaan Sampah dan Limbah, Perubahan Iklim, Risiko Bencana, atau Lainnya.',
         ]);
+        
+        // Validasi matra harus ada di MatraConstants
+        $validMatras = MatraConstants::MATRA_LIST;
+        $matra = $request->input('matra');
+        
+        if (!in_array($matra, $validMatras)) {
+            return response()->json([
+                'message' => 'Matra tidak valid. Pilih salah satu dari: ' . implode(', ', $validMatras),
+            ], 422);
+        }
+        
         // Logic for uploading Tabel Utama
         $submission = $request->submission;
         $tahun = $submission->tahun;
         $id_dinas = $submission->id_dinas;
 
         $kode_tabel = $request->input('kode_tabel');
-        $matra = $request->input('matra');
         
         // Validasi: kode_tabel harus sesuai dengan matra yang benar menurut MatraConstants
         $expectedMatra = MatraConstants::getMatraByKode($kode_tabel);
+        
+        if ($expectedMatra === null) {
+            return response()->json([
+                'message' => "Kode tabel {$kode_tabel} tidak valid.",
+            ], 422);
+        }
         
         if ($expectedMatra !== $matra) {
             return response()->json([
@@ -166,15 +181,33 @@ class UploadController extends Controller
         }
         
         // Sanitize matra name: hapus spasi, koma, dan karakter khusus untuk nama folder
-        $matraSanitized = str_replace([' ', ',', '.'], '_', $matra);
-        $kodeTabelSanitized = str_replace([' '], '_', $kode_tabel);
+        $matraSanitized = preg_replace('/[^a-zA-Z0-9_-]/', '_', str_replace(' ', '_', $matra));
+        // Sanitize kode_tabel: hapus karakter yang tidak valid untuk filename Windows (||, (), dll)
+        $kodeTabelSanitized = preg_replace('/[^a-zA-Z0-9_-]/', '_', str_replace(['||', ' ', '(', ')', ',', '.'], '_', $kode_tabel));
+        // Hapus underscore berlebih
+        $kodeTabelSanitized = preg_replace('/_+/', '_', trim($kodeTabelSanitized, '_'));
         
         $folder = "uploads/{$tahun}/dlh_{$id_dinas}/tabel_utama/{$matraSanitized}";
+        $filename = "{$id_dinas}.{$tahun}.{$kodeTabelSanitized}.{$request->file('file')->getClientOriginalExtension()}";
+        
         $path = $request->file('file')->storeAs(
             $folder,
-            "{$id_dinas}.{$tahun}.{$kodeTabelSanitized}.{$request->file('file')->getClientOriginalExtension()}",
+            $filename,
             self::DLH_DISK 
         );
+        
+        // Debug: pastikan path tidak false atau empty
+        if (!$path) {
+            return response()->json([
+                'message' => 'Gagal menyimpan file ke storage',
+                'debug' => [
+                    'folder' => $folder,
+                    'filename' => $filename,
+                    'disk' => self::DLH_DISK,
+                ]
+            ], 500);
+        }
+        
         if ($existing) {
             $existing->update([
                 'path' => $path,
@@ -394,10 +427,19 @@ class UploadController extends Controller
         // Status IKLH
         $iklhExists = $submission->iklh !== null;
         $statusDokumen[] = [
+            'nama' => 'iklh',
             'jenis_dokumen' => 'IKLH',
             'status_upload' => $iklhExists ? 'Dokumen Diunggah' : 'Belum Diunggah',
             'tanggal_upload' => $iklhExists ? $submission->iklh->updated_at->format('d-m-Y') : null,
             'status' => $iklhExists ? $submission->iklh->status : '-',
+            'uploaded' => $iklhExists,
+            'data' => $iklhExists ? [
+                'indeks_kualitas_air' => $submission->iklh->indeks_kualitas_air,
+                'indeks_kualitas_udara' => $submission->iklh->indeks_kualitas_udara,
+                'indeks_kualitas_lahan' => $submission->iklh->indeks_kualitas_lahan,
+                'indeks_kualitas_pesisir_laut' => $submission->iklh->indeks_kualitas_pesisir_laut,
+                'indeks_kualitas_kehati' => $submission->iklh->indeks_kualitas_kehati,
+            ] : null,
         ];
 
         return response()->json([
@@ -505,7 +547,7 @@ class UploadController extends Controller
      */
     public function downloadAllTemplatesZip()
     {
-        $zipPath = "tabel_utama/all_templates.zip";
+        $zipPath = "tabel_utama_zip/Tabel Utama.zip";
 
         if (!Storage::disk('templates')->exists($zipPath)) {
             return response()->json([
@@ -514,5 +556,363 @@ class UploadController extends Controller
         }
         @ob_clean();
         return Storage::disk('templates')->download($zipPath, "Template_Tabel_Utama_SLHD.zip");
+    }
+
+    /**
+     * Download templates ZIP per matra
+     * Mapping matra ke nama file ZIP
+     */
+    public function downloadMatraZip(string $matra)
+    {
+        // Mapping nama matra ke nama file ZIP
+        $matraToZipMap = [
+            'Keanekaragaman Hayati' => 'Keanekaragaman_Hayati.zip',
+            'Kualitas Air' => 'Kualitas_Air.zip',
+            'Kualitas Udara' => 'Kualitas_Udara.zip',
+            'Lahan dan Hutan' => 'Lahan_Dan_Hutan.zip',
+            'Laut, Pesisir, dan Pantai' => 'Laut,Pantai,Pesisir.zip',
+            'Pengelolaan Sampah dan Limbah' => 'Pengelolaan_limbah_sampah.zip',
+            'Perubahan Iklim' => 'perubahan_iklim.zip',
+            'Risiko Bencana' => 'resiko_bencana.zip',
+            'Dokumen Non Matra' => 'non-matra.zip',
+        ];
+
+        // Decode URL
+        $matra = urldecode($matra);
+
+        if (!isset($matraToZipMap[$matra])) {
+            return response()->json([
+                'message' => "Matra '{$matra}' tidak valid.",
+                'valid_matra' => array_keys($matraToZipMap)
+            ], 422);
+        }
+
+        $zipFileName = $matraToZipMap[$matra];
+        $zipPath = "tabel_utama_zip/{$zipFileName}";
+
+        if (!Storage::disk('templates')->exists($zipPath)) {
+            return response()->json([
+                'message' => "File ZIP untuk matra '{$matra}' belum tersedia.",
+                'expected_path' => $zipPath
+            ], 404);
+        }
+
+        @ob_clean();
+        
+        // Sanitize nama file untuk download
+        $downloadName = str_replace([' ', ','], '_', $matra) . '_Templates.zip';
+        
+        return Storage::disk('templates')->download($zipPath, $downloadName);
+    }
+
+    /**
+     * Preview dokumen DLH sendiri (termasuk draft) - untuk iframe
+     */
+    public function previewDocument(Request $request, string $documentType)
+    {
+        $submission = $request->submission;
+        
+        // Map document type
+        $document = null;
+        if ($documentType === 'ringkasan-eksekutif') {
+            $document = $submission->ringkasanEksekutif;
+        } elseif ($documentType === 'laporan-utama') {
+            $document = $submission->laporanUtama;
+        }
+
+        if (!$document) {
+            abort(404, 'Dokumen tidak ditemukan');
+        }
+
+        $filePath = $document->path;
+        $disk = Storage::disk(self::DLH_DISK);
+        
+        if (!$disk->exists($filePath)) {
+            abort(404, 'File tidak ditemukan di storage');
+        }
+
+        @ob_clean();
+        
+        // Return file dengan Content-Disposition: inline (preview, bukan download)
+        return response()->file($disk->path($filePath), [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="' . basename($filePath) . '"',
+        ]);
+    }
+
+    /**
+     * Download dokumen DLH sendiri (termasuk draft)
+     */
+    public function downloadDocument(Request $request, string $documentType)
+    {
+        $submission = $request->submission;
+        
+        // Map document type
+        $document = null;
+        if ($documentType === 'ringkasan-eksekutif') {
+            $document = $submission->ringkasanEksekutif;
+        } elseif ($documentType === 'laporan-utama') {
+            $document = $submission->laporanUtama;
+        }
+
+        if (!$document) {
+            return response()->json([
+                'message' => 'Dokumen tidak ditemukan'
+            ], 404);
+        }
+
+        $filePath = $document->path;
+        $disk = Storage::disk(self::DLH_DISK);
+        
+        if (!$disk->exists($filePath)) {
+            return response()->json([
+                'message' => 'File tidak ditemukan di storage',
+                'path' => $filePath
+            ], 404);
+        }
+
+        @ob_clean();
+
+        $fileName = basename($filePath);
+        
+        return $disk->download($filePath, $fileName, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+        ]);
+    }
+
+    /**
+     * Download Tabel Utama file (Excel)
+     * Endpoint: GET /api/dinas/upload/tabel-utama/download/{kodeTabel}
+     */
+    public function downloadTabelUtama(Request $request, string $kodeTabel)
+    {
+        $submission = $request->submission;
+        
+        // Decode kode_tabel (karena bisa ada spasi dan karakter khusus)
+        $kodeTabel = urldecode($kodeTabel);
+        
+        // Validasi kode tabel
+        if (!MatraConstants::isValidKode($kodeTabel)) {
+            return response()->json([
+                'message' => "Kode tabel tidak valid."
+            ], 422);
+        }
+
+        // Cari tabel yang sudah diupload
+        $tabel = TabelUtama::where([
+            'submission_id' => $submission->id,
+            'kode_tabel' => $kodeTabel,
+        ])->first();
+
+        if (!$tabel) {
+            return response()->json([
+                'message' => "Tabel {$kodeTabel} belum diupload."
+            ], 404);
+        }
+
+        $filePath = $tabel->path;
+        $disk = Storage::disk(self::DLH_DISK);
+        
+        if (!$disk->exists($filePath)) {
+            return response()->json([
+                'message' => 'File tidak ditemukan di storage',
+                'path' => $filePath
+            ], 404);
+        }
+
+        @ob_clean();
+
+        $fileName = basename($filePath);
+        $extension = pathinfo($filePath, PATHINFO_EXTENSION);
+        
+        // Determine content type based on extension
+        $contentTypes = [
+            'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'xls' => 'application/vnd.ms-excel',
+            'csv' => 'text/csv',
+        ];
+        $contentType = $contentTypes[$extension] ?? 'application/octet-stream';
+        
+        return $disk->download($filePath, $fileName, [
+            'Content-Type' => $contentType,
+            'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+        ]);
+    }
+
+    /**
+     * Get Tabel Utama status by matra - with upload status from submission
+     * Endpoint: GET /api/dinas/upload/tabel-utama/matra/{matra}
+     */
+    public function getTabelUtamaByMatraWithStatus(Request $request, string $matra)
+    {
+        // Validasi matra
+        if (!in_array($matra, MatraConstants::MATRA_LIST)) {
+            return response()->json([
+                'message' => 'Matra tidak valid.'
+            ], 422);
+        }
+
+        $submission = $request->submission;
+        
+        // Get all uploaded tabel for this submission
+        $uploadedTabels = TabelUtama::where('submission_id', $submission->id)
+            ->whereIn('kode_tabel', collect(MatraConstants::TABEL_TO_MATRA)
+                ->filter(fn($m) => $m === $matra)
+                ->keys()
+                ->toArray())
+            ->get()
+            ->keyBy('kode_tabel');
+
+        // Build response data
+        $tabelList = collect(MatraConstants::TABEL_TO_MATRA)
+            ->filter(fn($m) => $m === $matra)
+            ->map(function($m, $kodeTabel) use ($uploadedTabels) {
+                $uploaded = $uploadedTabels->get($kodeTabel);
+                
+                return [
+                    'kode_tabel' => $kodeTabel,
+                    'nomor_tabel' => MatraConstants::extractNomorTabel($kodeTabel),
+                    'matra' => $m,
+                    'has_template' => $this->checkTemplateExists($kodeTabel),
+                    'uploaded' => $uploaded !== null,
+                    'status' => $uploaded?->status,
+                    'updated_at' => $uploaded?->updated_at?->format('d-m-Y H:i'),
+                    'path' => $uploaded?->path,
+                ];
+            })
+            ->sortBy('nomor_tabel')
+            ->values();
+
+        // Calculate summary
+        $total = $tabelList->count();
+        $uploadedCount = $tabelList->where('uploaded', true)->count();
+        $finalizedCount = $tabelList->where('status', 'finalized')->count();
+
+        return response()->json([
+            'matra' => $matra,
+            'summary' => [
+                'total' => $total,
+                'uploaded' => $uploadedCount,
+                'finalized' => $finalizedCount,
+            ],
+            'data' => $tabelList
+        ]);
+    }
+
+    /**
+     * Finalize single Tabel Utama by kode_tabel
+     * Endpoint: PATCH /api/dinas/upload/tabel-utama/finalize
+     */
+    public function finalizeTabelUtama(Request $request)
+    {
+        $request->validate([
+            'kode_tabel' => 'required|string',
+        ], [
+            'kode_tabel.required' => 'Kode tabel wajib diisi.',
+        ]);
+
+        $kodeTabel = $request->input('kode_tabel');
+        
+        // Validasi kode tabel
+        if (!MatraConstants::isValidKode($kodeTabel)) {
+            return response()->json([
+                'message' => "Kode tabel {$kodeTabel} tidak valid.",
+            ], 422);
+        }
+
+        $submission = $request->submission;
+        
+        // Cari tabel yang sudah diupload
+        $tabel = TabelUtama::where([
+            'submission_id' => $submission->id,
+            'kode_tabel' => $kodeTabel,
+        ])->first();
+
+        if (!$tabel) {
+            return response()->json([
+                'message' => "Tabel {$kodeTabel} belum diupload. Silakan upload terlebih dahulu.",
+            ], 404);
+        }
+
+        // Cek status submission
+        if (in_array($submission->status, ['finalized', 'approved'])) {
+            return response()->json([
+                'message' => 'Submission sudah difinalisasi, tidak dapat mengubah status tabel.',
+            ], 403);
+        }
+
+        // Cek status tabel
+        if ($tabel->status === 'finalized') {
+            return response()->json([
+                'message' => "Tabel {$kodeTabel} sudah difinalisasi.",
+            ], 400);
+        }
+
+        if ($tabel->status === 'rejected') {
+            return response()->json([
+                'message' => "Tabel {$kodeTabel} ditolak, tidak dapat difinalisasi. Mohon perbaiki sesuai catatan admin.",
+            ], 400);
+        }
+
+        // Finalize tabel
+        try {
+            $this->DocumentFinalizer->finalize($tabel, "tabelUtama:{$kodeTabel}");
+            
+            return response()->json([
+                'message' => "Tabel {$kodeTabel} berhasil difinalisasi.",
+            ]);
+        } catch (\Exception $e) {
+            return response()->json([
+                'message' => "Gagal memfinalisasi tabel {$kodeTabel}.",
+                'error' => $e->getMessage(),
+            ], 400);
+        }
+    }
+
+    /**
+     * Get overall Tabel Utama status per matra (for main page)
+     * Endpoint: GET /api/dinas/upload/tabel-utama/status
+     */
+    public function getTabelUtamaStatus(Request $request)
+    {
+        $submission = $request->submission;
+        
+        // Get all uploaded tabel for this submission
+        $uploadedTabels = TabelUtama::where('submission_id', $submission->id)->get();
+
+        // Build status per matra
+        $statusPerMatra = collect(MatraConstants::MATRA_LIST)->map(function($matra) use ($uploadedTabels) {
+            // Get all kode_tabel for this matra
+            $kodeTabelsMatra = collect(MatraConstants::TABEL_TO_MATRA)
+                ->filter(fn($m) => $m === $matra)
+                ->keys()
+                ->toArray();
+
+            $total = count($kodeTabelsMatra);
+            $uploaded = $uploadedTabels->whereIn('kode_tabel', $kodeTabelsMatra)->count();
+            $finalized = $uploadedTabels->whereIn('kode_tabel', $kodeTabelsMatra)->where('status', 'finalized')->count();
+
+            return [
+                'matra' => $matra,
+                'total' => $total,
+                'uploaded' => $uploaded,
+                'finalized' => $finalized,
+            ];
+        });
+
+        // Calculate overall totals
+        $totalAll = $statusPerMatra->sum('total');
+        $uploadedAll = $statusPerMatra->sum('uploaded');
+        $finalizedAll = $statusPerMatra->sum('finalized');
+
+        return response()->json([
+            'summary' => [
+                'total' => $totalAll,
+                'uploaded' => $uploadedAll,
+                'finalized' => $finalizedAll,
+            ],
+            'data' => $statusPerMatra
+        ]);
     }
 }

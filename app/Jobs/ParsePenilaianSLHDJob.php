@@ -55,7 +55,8 @@ class ParsePenilaianSLHDJob implements ShouldQueue
         'Penetapan_Isu_Prioritas' => 'int',
         'Bab_3' => 'int',
         'Bab_4' => 'int',
-        'Bab_5' => 'int'];
+        'Bab_5' => 'int'
+    ];
         $rowToInsert=[];
 
         try{
@@ -79,17 +80,18 @@ class ParsePenilaianSLHDJob implements ShouldQueue
                     $data[$field]= safe($field, fn() => validateValue($row[$field] ?? null, $type), $errors);
                 }   
                 
+                // Skip row kosong (id_dinas null berarti row kosong)
+                if (!isset($data['id_dinas']) || $data['id_dinas'] === null) {
+                    continue; // Skip row ini
+                }
+                
                 // Validasi dan ambil nama dinas dari database (lebih konsisten)
-                if (isset($data['id_dinas']) && $data['id_dinas'] !== null) {
-                    $dinas = $allDinas->get($data['id_dinas']);
-                    if ($dinas) {
-                        $data['nama_dinas'] = $dinas->nama_dinas;
-                    } else {
-                        $errors['id_dinas'] = "Dinas dengan ID {$data['id_dinas']} belum terdaftar di sistem.";
-                        $data['nama_dinas'] = $row['nama_dinas'] ?? null; // Fallback ke Excel
-                    }
+                $dinas = $allDinas->get($data['id_dinas']);
+                if ($dinas) {
+                    $data['nama_dinas'] = $dinas->nama_dinas;
                 } else {
-                    $data['nama_dinas'] = $row['nama_dinas'] ?? null; // Fallback jika id_dinas null
+                    $errors['id_dinas'] = "Dinas dengan ID {$data['id_dinas']} belum terdaftar di sistem.";
+                    $data['nama_dinas'] = $row['nama_dinas'] ?? null; // Fallback ke Excel
                 }
                 
                 $data['status']= empty($errors) ? 'parsed_ok' : 'parsed_error';

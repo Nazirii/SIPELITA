@@ -152,13 +152,16 @@ class RekapPenilaianService
     
     /**
      * Update rekap saat Wawancara finalized
-     * Formula: total_skor_final = (0.9 * nilai_slhd) + (0.1 * nilai_wawancara)
+     * Formula: total_skor_final = (0.9 * total_skor_validasi1) + (0.1 * nilai_wawancara)
      */
     public function updateFromWawancara($year)
     {
-        $wawancaraData = \App\Models\Pusdatin\Wawancara::where('year', $year)
-            ->where('is_finalized', true)
-            ->get();
+        // Ambil semua wawancara untuk tahun ini (tidak perlu filter is_finalized karena sudah di-update sebelum method ini dipanggil)
+        $wawancaraData = \App\Models\Pusdatin\Wawancara::where('year', $year)->get();
+        
+        if ($wawancaraData->isEmpty()) {
+            throw new \Exception('Tidak ada data wawancara untuk tahun '.$year);
+        }
         
         foreach ($wawancaraData as $wawancara) {
             $rekap = RekapPenilaian::where([
@@ -166,19 +169,31 @@ class RekapPenilaianService
                 'id_dinas' => $wawancara->id_dinas
             ])->first();
             
-            if (!$rekap) continue;
+            if (!$rekap) {
+                \Log::warning("Rekap tidak ditemukan untuk id_dinas: {$wawancara->id_dinas}, year: {$year}");
+                continue;
+            }
             
-            // Hitung total skor final: 90% SLHD + 10% Wawancara
-            $total_skor_final = (0.9 * $rekap->nilai_slhd) + (0.1 * $wawancara->nilai_wawancara);
+            // Pastikan nilai wawancara ada
+            if (is_null($wawancara->nilai_wawancara)) {
+                \Log::warning("Nilai wawancara null untuk id_dinas: {$wawancara->id_dinas}, year: {$year}");
+                continue;
+            }
+            
+            // Hitung total skor final: 90% dari nilai SLHD + 10% Wawancara
+            $nilaiSLHD = $rekap->nilai_slhd ?? 0;
+            $total_skor_final = (0.9 * $nilaiSLHD) + (0.1 * $wawancara->nilai_wawancara);
             
             $rekap->update([
                 'nilai_wawancara' => $wawancara->nilai_wawancara,
                 'lolos_wawancara' => true,
                 'total_skor_final' => $total_skor_final
             ]);
+            
+            \Log::info("Updated rekap for dinas {$wawancara->id_dinas}: nilai_slhd={$nilaiSLHD}, nilai_wawancara={$wawancara->nilai_wawancara}, skor_final={$total_skor_final}");
         }
         
-        // Hitung peringkat final berdasarkan total_skor_final (descending)
+        // Hitung peringkat final berdasarkan skor_final (descending)
         $rekapWithScore = RekapPenilaian::where('year', $year)
             ->whereNotNull('total_skor_final')
             ->orderByDesc('total_skor_final')
@@ -188,6 +203,8 @@ class RekapPenilaianService
         foreach ($rekapWithScore as $rekap) {
             $rekap->update(['peringkat_final' => $peringkat++]);
         }
+        
+        \Log::info("Finalized wawancara for year {$year}, updated {$wawancaraData->count()} records");
     }
     
     /**
@@ -199,7 +216,8 @@ class RekapPenilaianService
             'nilai_wawancara' => null,
             'lolos_wawancara' => false,
             'total_skor_final' => null,
-            'peringkat_final' => null
+            'peringkat_final' => null,
+            'status_akhir' => null
         ]);
     }
     

@@ -14,6 +14,7 @@ use App\Models\Files\RingkasanEksekutif;
 use App\Models\Files\LaporanUtama;
 use App\Models\Files\TabelUtama;
 use App\Models\Files\Iklh;
+use App\Helpers\MatraConstants;
 
 class TestingDataSeeder extends Seeder
 {
@@ -121,14 +122,31 @@ class TestingDataSeeder extends Seeder
         
         // Source files path (relative dari disk 'templates')
         $sourcePdf = 'slhd/buku1/erd.pdf';
-        $sourceExcel = 'tabel_utama/Keanekaragaman_Hayati/Tabel_9.xlsx';
         
-        // Validasi source files exist
+        // Validasi source PDF exist
         if (!$templateDisk->exists($sourcePdf)) {
             throw new \Exception("Source PDF not found: {$sourcePdf}");
         }
-        if (!$templateDisk->exists($sourceExcel)) {
-            throw new \Exception("Source Excel not found: {$sourceExcel}");
+        
+        // Scan semua file Excel di folder tabel_utama
+        $tabelTemplates = [];
+        $templateFiles = $templateDisk->files('tabel_utama');
+        
+        foreach ($templateFiles as $file) {
+            $filename = basename($file);
+            // Extract nomor dari nama file (format: "28. Nama.xlsx" atau "01 Nama.xlsx")
+            if (preg_match('/^0*(\d+)[\.\s]/', $filename, $matches)) {
+                $nomor = (int) $matches[1];
+                if ($nomor >= 1 && $nomor <= 80) {
+                    $tabelTemplates[$nomor] = $file;
+                }
+            }
+        }
+        
+        $this->command->info("📊 Found " . count($tabelTemplates) . " tabel templates");
+        
+        if (count($tabelTemplates) < 80) {
+            $this->command->warn("⚠️  Warning: Only " . count($tabelTemplates) . " templates found, expected 80");
         }
         
         // Ambil N dinas pertama (ordered by id)
@@ -178,27 +196,34 @@ class TestingDataSeeder extends Seeder
                 'indeks_kualitas_kehati' => rand(50, 100),
             ]);
             
-            // 4. Tabel Utama (78 files, copy Excel dari templates ke dlh)
-            // Enum values from migration (must match exactly)
-            $matras = [
-                'Keanekaragaman Hayati',
-                'Kualitas Air',
-                'Laut, Pesisir, dan Pantai',
-                'Kualitas Udara',
-                'Lahan dan Hutan'
-            ];
+            // 4. Tabel Utama (80 files dari MatraConstants)
+            $allKodeTabel = MatraConstants::getAllKodeTabel();
             
-            for ($i = 1; $i <= 78; $i++) {
-                $kodeTabel = "Tabel {$i}";
-                $tabelPath = "{$basePath}/tabel_utama/tabel_{$i}_{$dinasId}_{$year}.xlsx";
+            foreach ($allKodeTabel as $kodeTabel) {
+                $matra = MatraConstants::getMatraByKode($kodeTabel);
+                $nomorTabel = MatraConstants::extractNomorTabel($kodeTabel);
                 
-                $dlhDisk->put($tabelPath, $templateDisk->get($sourceExcel));
+                // Sanitize for file/folder names
+                $matraSanitized = str_replace([' ', ',', '.', '(', ')'], '_', $matra);
+                $kodeTabelSanitized = str_replace([' ', '||'], ['_', '-'], $kodeTabel);
+                
+                $tabelPath = "{$basePath}/tabel_utama/{$matraSanitized}/tabel_{$nomorTabel}_{$dinasId}_{$year}.xlsx";
+                
+                // Cek apakah ada template untuk nomor ini
+                if (isset($tabelTemplates[$nomorTabel])) {
+                    // Copy dari template yang sesuai
+                    $dlhDisk->put($tabelPath, $templateDisk->get($tabelTemplates[$nomorTabel]));
+                } else {
+                    // Skip jika template tidak ada
+                    $this->command->warn("⚠️  Template for Tabel {$nomorTabel} not found, skipping...");
+                    continue;
+                }
                 
                 TabelUtama::create([
                     'submission_id' => $submission->id,
                     'kode_tabel' => $kodeTabel,
                     'path' => $tabelPath,
-                    'matra' => $matras[$i % 5],
+                    'matra' => $matra,
                     'status' => 'finalized',
                 ]);
             }

@@ -10,38 +10,36 @@ use Illuminate\Support\Facades\DB;
 class DeadlineController extends Controller
 {
     /**
-     * Get all deadlines for a specific year
+     * Get deadline submission untuk year tertentu (default current year)
      */
     public function index(Request $request, $year = null)
     {
         $year = $year ?? now()->year;
 
-        $deadlines = Deadline::with(['creator', 'updater'])
+        $deadline = Deadline::with(['creator', 'updater'])
             ->byYear($year)
+            ->byStage('submission')
             ->active()
-            ->get();
+            ->first();
 
         return response()->json([
             'year' => $year,
-            'data' => $deadlines
+            'data' => $deadline
         ]);
     }
 
     /**
-     * Create or update deadline for a stage
+     * Set/update deadline submission
      */
     public function setDeadline(Request $request)
     {
         $request->validate([
             'year' => 'required|integer|min:2020|max:2100',
-            'stage' => 'required|in:submission,penilaian_slhd,penilaian_penghargaan,validasi_1,validasi_2',
             'deadline_at' => 'required|date|after:now',
             'catatan' => 'nullable|string',
         ], [
             'year.required' => 'Tahun wajib diisi.',
             'year.integer' => 'Tahun harus berupa angka.',
-            'stage.required' => 'Stage wajib diisi.',
-            'stage.in' => 'Stage tidak valid.',
             'deadline_at.required' => 'Tanggal deadline wajib diisi.',
             'deadline_at.date' => 'Tanggal deadline harus berupa tanggal yang valid.',
             'deadline_at.after' => 'Tanggal deadline harus lebih dari waktu sekarang.',
@@ -49,10 +47,10 @@ class DeadlineController extends Controller
 
         DB::beginTransaction();
         try {
-            // Nonaktifkan deadline lama untuk stage dan year yang sama
+            // Nonaktifkan deadline lama untuk submission year yang sama
             Deadline::where([
                 'year' => $request->year,
-                'stage' => $request->stage,
+                'stage' => 'submission',
                 'is_active' => true
             ])->update([
                 'is_active' => false,
@@ -62,7 +60,7 @@ class DeadlineController extends Controller
             // Buat deadline baru
             $deadline = Deadline::create([
                 'year' => $request->year,
-                'stage' => $request->stage,
+                'stage' => 'submission',
                 'deadline_at' => $request->deadline_at,
                 'is_active' => true,
                 'created_by' => $request->user()->id,
@@ -72,7 +70,7 @@ class DeadlineController extends Controller
             DB::commit();
 
             return response()->json([
-                'message' => 'Deadline berhasil diatur.',
+                'message' => 'Deadline submission berhasil diatur.',
                 'data' => $deadline->load(['creator'])
             ]);
         } catch (\Exception $e) {
@@ -91,6 +89,13 @@ class DeadlineController extends Controller
     {
         $deadline = Deadline::findOrFail($id);
 
+        // Pastikan hanya bisa hapus deadline submission
+        if ($deadline->stage !== 'submission') {
+            return response()->json([
+                'message' => 'Hanya deadline submission yang dapat dihapus.'
+            ], 403);
+        }
+
         $deadline->update([
             'is_active' => false,
             'updated_by' => $request->user()->id
@@ -102,18 +107,18 @@ class DeadlineController extends Controller
     }
 
     /**
-     * Get active deadline for specific stage and year
+     * Get active deadline submission untuk year tertentu
      */
-    public function getActiveDeadline($year, $stage)
+    public function getActiveDeadline($year)
     {
         $deadline = Deadline::byYear($year)
-            ->byStage($stage)
+            ->byStage('submission')
             ->active()
             ->first();
 
         if (!$deadline) {
             return response()->json([
-                'message' => 'Tidak ada deadline aktif untuk stage ini.'
+                'message' => 'Tidak ada deadline submission aktif untuk tahun ini.'
             ], 404);
         }
 

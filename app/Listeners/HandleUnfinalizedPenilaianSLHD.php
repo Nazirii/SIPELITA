@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 use App\Models\Pusdatin\PenilaianPenghargaan;
 use App\Models\Pusdatin\Wawancara;
+use App\Models\Pusdatin\RekapPenilaian;
 use Illuminate\Support\Facades\Storage;
 class HandleUnfinalizedPenilaianSLHD
 {
@@ -34,6 +35,26 @@ class HandleUnfinalizedPenilaianSLHD
             
             // hapus data Wawancara untuk tahun terkait (tidak ada FK cascade ke Validasi2)
             Wawancara::where('year', $slhd->year)->delete();
+
+            // Reset rekap penilaian - hapus semua data penilaian setelah SLHD
+            RekapPenilaian::where('year', $slhd->year)->update([
+                'nilai_slhd' => null,
+                'lolos_slhd' => false,
+                'nilai_penghargaan' => null,
+                'masuk_penghargaan' => false,
+                'nilai_iklh' => null,
+                'total_skor_validasi1' => null,
+                'lolos_validasi1' => false,
+                'lolos_validasi2' => false,
+                'kriteria_wtp' => null,
+                'kriteria_kasus_hukum' => null,
+                'peringkat' => null,
+                'nilai_wawancara' => null,
+                'lolos_wawancara' => false,
+                'total_skor_final' => null,
+                'peringkat_final' => null,
+                'status_akhir' => null
+            ]);
         }
     }
 }

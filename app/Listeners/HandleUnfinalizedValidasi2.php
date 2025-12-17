@@ -4,6 +4,7 @@ namespace App\Listeners;
 
 use App\Events\Validasi2Updated;
 use App\Models\Pusdatin\Wawancara;
+use App\Models\Pusdatin\RekapPenilaian;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Queue\InteractsWithQueue;
 
@@ -28,6 +29,17 @@ class HandleUnfinalizedValidasi2
         if ($validasi2->getOriginal('is_finalized') === true && $validasi2->is_finalized === false) {
             // Hapus semua Wawancara untuk year terkait (tidak ada FK cascade)
             Wawancara::where('year', $validasi2->year)->delete();
+
+            // Reset rekap penilaian - hapus data setelah Validasi2
+            RekapPenilaian::where('year', $validasi2->year)->update([
+                'lolos_validasi2' => false,
+                'peringkat' => null,
+                'nilai_wawancara' => null,
+                'lolos_wawancara' => false,
+                'total_skor_final' => null,
+                'peringkat_final' => null,
+                'status_akhir' => null
+            ]);
         }
     }
 }

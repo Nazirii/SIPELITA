@@ -1,4 +1,3 @@
-echo "---- START ----\n";
 <?php
 use Illuminate\Foundation\Application;
 use Illuminate\Http\Request;

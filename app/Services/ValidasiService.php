@@ -26,10 +26,8 @@ class ValidasiService
         
         $rows=$penilaianPenghargaan->PenilaianPenghargaanParsed()->get();
         $rowToInsert=[];
-        if(isEmpty($rows)){
-            return response()->json([
-                'message' => 'Data Penilaian belum selesai dibaca,mohon menunggu sebentar.',
-            ], 404);
+        if($rows->isEmpty()){
+            throw new \Exception('Data Penilaian belum selesai dibaca, mohon menunggu sebentar.');
         }
         $validasi1=Validasi1::create([
             'penilaian_penghargaan_ref_id' => $penilaianPenghargaan->id,
@@ -42,12 +40,13 @@ class ValidasiService
 
             // Ambil semua submission (1 query)
             $submissions = Submission::whereIn('id_dinas', $ids)
-                ->where('year', $penilaianPenghargaan->year)
+                ->where('tahun', $penilaianPenghargaan->year)
                 ->get()
                 ->keyBy('id_dinas');
 
-            // Ambil semua IKLH (1 query)
+            // Ambil semua IKLH yang statusnya approved (1 query)
             $iklhs = Iklh::whereIn('submission_id', $submissions->pluck('id'))
+                ->where('status', 'approved')
                 ->get()
                 ->keyBy('submission_id');
         
@@ -82,7 +81,7 @@ class ValidasiService
                 $data['Nilai_IKLH'] = null;
             }
             
-            $data['Total_Skor']= ($data['Nilai_Penghargaan'] ?? 0) + ($data['Nilai_IKLH'] ?? 0)/2;
+            $data['Total_Skor']= (($data['Nilai_Penghargaan'] ?? 0) + ($data['Nilai_IKLH'] ?? 0))/2;
             $data['status']='parsed_ok';
             $data['status_result']= ($data['Total_Skor'] >= 60) ? 'lulus' : 'tidak_lulus';
             $rowToInsert[]=$data;

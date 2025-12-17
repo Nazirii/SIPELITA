@@ -1,5 +1,4 @@
 <?php
-
      function safe($key,$callback,&$error,$default=null)
     {
         try{
@@ -28,7 +27,6 @@
             default:
                 throw new \Exception("Unknown type for validation");
         }
-    
     }
    
 

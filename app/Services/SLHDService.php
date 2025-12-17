@@ -15,8 +15,8 @@ class SLHDService
         'Bab_1' => 0.10,
         'Bab_2' => 0.50, // dibagi lagi ke matra
         'Bab_3' => 0.20,
-        'Bab_4' => 0.10,
-        'Bab_5' => 0.10,
+        'Bab_4' => 0.15,
+        'Bab_5' => 0.05,
     ];
 
     // Bobot matra pada BAB 2
@@ -39,19 +39,34 @@ class SLHDService
         // Hitung BAB 2
         $bab2Score = 0;
         foreach ($this->bab2Weights as $col => $weight) {
-            $value = floatval($row[$col] ?? 0);
+            $value = $this->toFloat($row[$col] ?? null);
             $bab2Score += $value * $weight;  // Nilai * bobot matra
         }
 
         // Hitung skor total SLHD berdasarkan bobot BAB
         $total =
-            ($row['Bab_1'] ?? 0) * $this->babWeights['Bab_1'] +
+            $this->toFloat($row['Bab_1'] ?? null) * $this->babWeights['Bab_1'] +
             $bab2Score * $this->babWeights['Bab_2'] +
-            ($row['Bab_3'] ?? 0) * $this->babWeights['Bab_3'] +
-            ($row['Bab_4'] ?? 0) * $this->babWeights['Bab_4'] +
-            ($row['Bab_5'] ?? 0) * $this->babWeights['Bab_5'];
+            $this->toFloat($row['Bab_3'] ?? null) * $this->babWeights['Bab_3'] +
+            $this->toFloat($row['Bab_4'] ?? null) * $this->babWeights['Bab_4'] +
+            $this->toFloat($row['Bab_5'] ?? null) * $this->babWeights['Bab_5'];
 
         return $total;
+    }
+    
+    /**
+     * Safely convert value to float, handling nulls, empty strings, and non-numeric values
+     */
+    private function toFloat($value): float
+    {
+        if ($value === null || $value === '' || $value === '-') {
+            return 0.0;
+        }
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+        // Untuk string non-numeric, return 0
+        return 0.0;
     }
 
     /**

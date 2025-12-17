@@ -17,6 +17,9 @@ use App\Services\ExcelService;
 use App\services\SLHDService;
 use PhpOffice\PhpSpreadsheet\Spreadsheet;
 use Illuminate\Support\Facades\Log;
+use App\Models\Submission;
+use App\Models\Dinas;
+use App\Models\Region;
 
 class PenilaianSLHD_Controller extends Controller
 {
@@ -47,6 +50,103 @@ class PenilaianSLHD_Controller extends Controller
     public function tes(Request $request){
         return response()->json(['message' => 'Test successful','id'=>$request->user()->id]);
     }
+
+    /**
+     * Get submissions dengan status kelayakan dokumen (finalized/approved status)
+     * Untuk tabel "Kelayakan Administrasi Dokumen"
+     */
+    public function getSubmissionsStatus(Request $request)
+    {
+        $year = $request->input('year', date('Y'));
+        $tipe = $request->input('tipe'); // 'provinsi' atau 'kabupaten/kota'
+        $provinsi = $request->input('provinsi'); // Filter by nama provinsi
+        
+        // Get all dinas with their submissions
+        $query = Dinas::with(['region.parent', 'submissions' => function($q) use ($year) {
+            $q->where('tahun', $year)
+              ->with(['laporanUtama', 'tabelUtama', 'ringkasanEksekutif']);
+        }]);
+        
+        // Filter by tipe
+        if ($tipe && $tipe !== 'all') {
+            $query->whereHas('region', function($q) use ($tipe) {
+                $q->where('type', $tipe);
+            });
+        }
+        
+        // Filter by provinsi (untuk kab/kota)
+        if ($provinsi && $provinsi !== 'all' && $provinsi !== '') {
+            $query->whereHas('region', function($q) use ($provinsi) {
+                $q->where('nama_region', $provinsi)
+                  ->orWhereHas('parent', function($q2) use ($provinsi) {
+                      $q2->where('nama_region', $provinsi);
+                  });
+            });
+        }
+        
+        $dinasData = $query->get();
+        
+        $result = $dinasData->map(function($dinas) {
+            $submission = $dinas->submissions->first();
+            $region = $dinas->region;
+            
+            // Get provinsi name
+            $provinsiName = '';
+            if ($region) {
+                if ($region->type === 'provinsi') {
+                    $provinsiName = $region->nama_region;
+                } else {
+                    $provinsiName = $region->parent?->nama_region ?? '';
+                }
+            }
+            
+            // Check finalized status for each document
+            // Buku I = Laporan Utama, Buku II = Ringkasan Eksekutif, Tabel = Tabel Utama
+            $buku1Finalized = false;
+            $buku2Finalized = false;
+            $tabelFinalized = false;
+            
+            $buku1Status = null;
+            $buku2Status = null;
+            $tabelStatus = null;
+            
+            if ($submission) {
+                $buku1Finalized = $submission->laporanUtama?->status === 'finalized' || $submission->laporanUtama?->status === 'approved';
+                $buku2Finalized = $submission->ringkasanEksekutif?->status === 'finalized' || $submission->ringkasanEksekutif?->status === 'approved';
+                $tabelFinalized = $submission->tabelUtama->count() > 0 && $submission->tabelUtama->every(fn($t) => $t->status === 'finalized' || $t->status === 'approved');
+                
+                $buku1Status = $submission->laporanUtama?->status;
+                $buku2Status = $submission->ringkasanEksekutif?->status;
+                // Untuk tabel, ambil status yang paling umum atau yang pertama
+                $tabelStatus = $submission->tabelUtama->count() > 0 
+                    ? ($submission->tabelUtama->every(fn($t) => $t->status === 'approved') ? 'approved' 
+                        : ($submission->tabelUtama->every(fn($t) => $t->status === 'finalized') ? 'finalized' : 'draft'))
+                    : null;
+            }
+            
+            return [
+                'id_dinas' => $dinas->id,
+                'nama_dinas' => $dinas->nama_dinas,
+                'tipe' => $region?->type ?? 'unknown',
+                'provinsi' => $provinsiName,
+                'submission_id' => $submission?->id,
+                'buku1_finalized' => $buku1Finalized,
+                'buku2_finalized' => $buku2Finalized,
+                'tabel_finalized' => $tabelFinalized,
+                'all_finalized' => $buku1Finalized && $buku2Finalized && $tabelFinalized,
+                'buku1_status' => $buku1Status,
+                'buku2_status' => $buku2Status,
+                'tabel_status' => $tabelStatus,
+            ];
+        });
+        
+        return response()->json([
+            'data' => $result,
+            'total' => $result->count(),
+            'year' => $year
+        ]);
+    }
+
     public function downloadTemplate()
     {
         $disk = Storage::disk('templates');
@@ -118,7 +218,10 @@ class PenilaianSLHD_Controller extends Controller
         ], 200);
 }
     public function getPenilaianSLHD($year){
-        $penilaian = PenilaianSLHD::where('year',$year)->orderByDesc('created_at')->get();
+        $penilaian = PenilaianSLHD::with('uploadedBy:id,email')
+            ->where('year',$year)
+            ->orderByDesc('created_at')
+            ->get();
         if(!$penilaian){
             return response()->json([
                 'message' => 'Penilaian SLHD untuk tahun '.$year.' tidak ditemukan.'

@@ -18,18 +18,8 @@ return new class extends Migration
             ->onDelete('cascade');
             $table->string('kode_tabel');
             $table->string('path');
-            $table->enum('matra', [
-                'Keanekaragaman Hayati',
-                'Kualitas Air',
-                'Laut, Pesisir, dan Pantai',
-                'Kualitas Udara',
-                'Lahan dan Hutan',
-                'Pengelolaan Sampah dan Limbah',
-                'Perubahan Iklim',
-                'Risiko Bencana',
-                'Lainnya'
-            ]);
-            $table->enum('status', ['draft', 'finalized'])->default('draft');
+            $table->string('matra'); // Changed from enum to string for flexibility
+            $table->enum('status', ['draft', 'finalized', 'approved', 'rejected'])->default('draft');
             $table->text('catatan_admin')->nullable();
 
             $table->timestamps();

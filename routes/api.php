@@ -10,18 +10,83 @@ use App\http\Controllers\Pusdatin\PenilaianPenghargaan_Controller;
 
 Route::post('/login', [App\Http\Controllers\Auth\AuthController::class, 'login']);
 Route::post('/register', [App\Http\Controllers\Auth\AuthController::class, 'register']);
+Route::post('/logout', [App\Http\Controllers\Auth\AuthController::class, 'logout'])->middleware('auth:sanctum');
+
+// --- REGISTER DROPDOWNS (Public) ---
+// Provinsi list untuk dropdown
+Route::get('/register/provinces', function () {
+    return response()->json([
+        'data' => \App\Models\Region::where('type', 'provinsi')
+            ->orderBy('nama_region')
+            ->get(['id', 'nama_region as nama'])
+    ]);
+});
+
+// Kabupaten/Kota by provinsi untuk dropdown
+Route::get('/register/regencies/{provinceId}', function ($provinceId) {
+    return response()->json([
+        'data' => \App\Models\Region::where('type', 'kabupaten/kota')
+            ->where('parent_id', $provinceId)
+            ->orderBy('nama_region')
+            ->get(['id', 'nama_region as nama'])
+    ]);
+});
+
+// Dinas Provinsi list
+Route::get('/register/dinas/provinsi', function () {
+    return response()->json([
+        'data' => \App\Models\Dinas::with('region')
+            ->whereHas('region', fn($q) => $q->where('type', 'provinsi'))
+            ->orderBy('nama_dinas')
+            ->get(['id', 'nama_dinas', 'kode_dinas', 'region_id'])
+            ->map(fn($d) => [
+                'id' => $d->id,
+                'nama_dinas' => $d->nama_dinas,
+                'region' => $d->region->nama_region ?? null,
+            ])
+    ]);
+});
+
+// Dinas Kab/Kota by provinsi
+Route::get('/register/dinas/kabkota/{provinceId}', function ($provinceId) {
+    // Get all region_ids untuk kabupaten/kota di bawah provinsi ini
+    $regionIds = \App\Models\Region::where('type', 'kabupaten/kota')
+        ->where('parent_id', $provinceId)
+        ->pluck('id');
+    
+    return response()->json([
+        'data' => \App\Models\Dinas::with('region')
+            ->whereIn('region_id', $regionIds)
+            ->orderBy('nama_dinas')
+            ->get(['id', 'nama_dinas', 'kode_dinas', 'region_id'])
+            ->map(fn($d) => [
+                'id' => $d->id,
+                'nama_dinas' => $d->nama_dinas,
+                'region' => $d->region->nama_region ?? null,
+            ])
+    ]);
+});
+
+// Public route untuk download/preview dokumen (tidak perlu auth karena dibuka di new tab)
+Route::prefix('document')->group(function () {
+    Route::get('/preview/{submission}/{documentType}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'previewDocument'])
+        ->where('documentType', 'ringkasan-eksekutif|laporan-utama');
+    Route::get('/download/{submission}/{documentType}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'downloadDocument'])
+        ->where('documentType', 'ringkasan-eksekutif|laporan-utama');
+});
 
 // Route::get('pusdatin/penilaian/penghargaan/template/{year}',  [PenilaianPenghargaan_Controller::class, 'downloadTemplate']);
 
-Route::get('/user', function (Request $request) {
-        $users = User::all();
+// Wilayah endpoints - Public access untuk dropdown filter
+Route::get('/wilayah/provinces', function () {
+    return response()->json([
+        'data' => \App\Models\Region::where('type', 'provinsi')
+            ->orderBy('nama_region')
+            ->get(['id', 'nama_region'])
+    ]);
+});
 
-        // return ke client dalam bentuk JSON
-        return response()->json($users);
-    })->middleware('auth:sanctum');
-
-
-    Route::middleware(['auth:sanctum','role:admin'])->group(function () {
+Route::middleware(['auth:sanctum','role:admin'])->group(function () {
         // Dashboard endpoints
         Route::get('/admin/dashboard', [App\Http\Controllers\Admin\DashboardController::class, 'getStats']); // Alias untuk FE
         Route::get('/admin/dashboard/stats', [App\Http\Controllers\Admin\DashboardController::class, 'getStats']);
@@ -35,6 +100,9 @@ Route::get('/user', function (Request $request) {
         Route::post('/admin/users/pusdatin', [AdminController::class, 'createPusdatin']);
         Route::get('/admin/{role}/{status}',[AdminController::class,'showUser']);
         Route::get('/admin/track/{year?}/{pusdatin_id?}',[AdminController::class,'trackingHistoryPusdatin']);
+        
+        // Get list pusdatin untuk dropdown
+        Route::get('/admin/pusdatin/approved', [AdminController::class, 'showUser'])->defaults('role', 'pusdatin')->defaults('status', 'approved');
     });
 
 Route::middleware(['auth:sanctum', 'role:provinsi,kabupaten/kota', 'ensuresubmissions'])
@@ -50,6 +118,19 @@ Route::middleware(['auth:sanctum', 'role:provinsi,kabupaten/kota', 'ensuresubmis
         ->middleware(['ensuredocument:iklh', 'checkdeadline:submission']);
     
     Route::get('/status-dokumen', [UploadController::class, 'getStatusDokumen']);
+    
+    // Tabel Utama status endpoint
+    Route::get('/tabel-utama/status', [UploadController::class, 'getTabelUtamaStatus']);
+    Route::get('/tabel-utama/matra/{matra}', [UploadController::class, 'getTabelUtamaByMatraWithStatus'])
+        ->where('matra', '.+'); // Match one or more characters
+    Route::get('/tabel-utama/download/{kodeTabel}', [UploadController::class, 'downloadTabelUtama'])
+        ->where('kodeTabel', '.+'); // Allow any character including spaces (URL encoded)
+    
+    // Preview & Download dokumen sendiri (termasuk draft)
+    Route::get('/preview/{documentType}', [UploadController::class, 'previewDocument'])
+        ->where('documentType', 'ringkasan-eksekutif|laporan-utama');
+    Route::get('/download/{documentType}', [UploadController::class, 'downloadDocument'])
+        ->where('documentType', 'ringkasan-eksekutif|laporan-utama');
     
     Route::patch('/finalize-submission', [UploadController::class, 'finalizeSubmission'])
         ->middleware('checkdeadline:submission');
@@ -69,6 +150,8 @@ Route::middleware(['auth:sanctum', 'role:provinsi,kabupaten/kota'])
     // Contoh: /download/Tabel%209 atau /download/Tabel+9
     Route::get('/download/{kodeTabel}', [UploadController::class, 'downloadTemplate']);
     Route::get('/download-all-zip', [UploadController::class, 'downloadAllTemplatesZip']);
+    Route::get('/download-matra-zip/{matra}', [UploadController::class, 'downloadMatraZip'])
+        ->where('matra', '.+'); // Allow any character including spaces and commas
 });
 
 // Pengumuman Routes - untuk dinas
@@ -76,9 +159,29 @@ Route::middleware(['auth:sanctum', 'role:provinsi,kabupaten/kota'])
 ->prefix('dinas/pengumuman')
 ->group(function () {
     Route::get('/timeline/{year?}', [App\Http\Controllers\Dinas\PengumumanController::class, 'timeline']);
+    Route::get('/detail-slhd/{year?}', [App\Http\Controllers\Dinas\PengumumanController::class, 'getDetailPenilaianSLHD']);
+    Route::get('/detail-penghargaan/{year?}', [App\Http\Controllers\Dinas\PengumumanController::class, 'getDetailPenilaianPenghargaan']);
     Route::get('/{year}/{tahap}', [App\Http\Controllers\Dinas\PengumumanController::class, 'show']);
 });
+
+// Dashboard Routes - untuk dinas (single endpoint untuk semua data dashboard)
+Route::middleware(['auth:sanctum', 'role:provinsi,kabupaten/kota'])
+->prefix('dinas/dashboard')
+->group(function () {
+    Route::get('/{year?}', [App\Http\Controllers\Dinas\DashboardController::class, 'index']);
+});
         
+Route::middleware(['auth:sanctum', 'role:pusdatin'])->prefix('pusdatin')->group(function () {
+    // Dashboard endpoints
+    Route::prefix('dashboard')->controller(App\Http\Controllers\Pusdatin\DashboardController::class)->group(function () {
+        Route::get('/stats', 'getStats');
+        Route::get('/tahapan', 'getTahapanProgress');
+        Route::get('/notifications', 'getNotifications');
+        Route::get('/activities', 'getRecentActivities');
+    });
+});
+
+
 Route::middleware(['auth:sanctum', 'role:pusdatin'])->prefix('pusdatin/review')->group(function () {
     // List submissions untuk review dokumen upload
     Route::get('/{year?}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'index']);
@@ -88,6 +191,15 @@ Route::middleware(['auth:sanctum', 'role:pusdatin'])->prefix('pusdatin/review')-
     Route::get('/submission/{submission}/ringkasan-eksekutif', [App\Http\Controllers\Pusdatin\ReviewController::class, 'showRingkasanEksekutif']);
     Route::get('/submission/{submission}/laporan-utama', [App\Http\Controllers\Pusdatin\ReviewController::class, 'showLaporanUtama']);
     Route::get('/submission/{submission}/tabel-utama', [App\Http\Controllers\Pusdatin\ReviewController::class, 'showTabelUtama']);
+    Route::get('/submission/{submission}/tabel-utama/{tabelId}/download', [App\Http\Controllers\Pusdatin\ReviewController::class, 'downloadTabelUtama']);
+    
+    // Preview dokumen (inline PDF untuk iframe)
+    Route::get('/submission/{submission}/preview/{documentType}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'previewDocument'])
+        ->where('documentType', 'ringkasan-eksekutif|laporan-utama');
+    
+    // Download dokumen (force download)
+    Route::get('/submission/{submission}/download/{documentType}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'downloadDocument'])
+        ->where('documentType', 'ringkasan-eksekutif|laporan-utama');
     
     // Review dokumen
     Route::post('/submission/{submission}/{documentType}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'reviewDocument'])
@@ -95,12 +207,19 @@ Route::middleware(['auth:sanctum', 'role:pusdatin'])->prefix('pusdatin/review')-
     
     // IKLH Review - data IKLH per submission yang sudah finalized
     Route::get('/iklh/{year?}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'indexIKLH']);
-    // Route::post('/iklh/{submission}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'reviewIKLH']);
+    Route::post('/iklh/{submission}', [App\Http\Controllers\Pusdatin\ReviewController::class, 'reviewIKLH']);
 });     
 Route::get('/test-clean', function() {
     return response()->json(['status' => 'clean']);
 });
+
 Route::middleware(['auth:sanctum', 'role:pusdatin'])->prefix('pusdatin/penilaian')->group(function () {
+    
+    // Progress Stats untuk semua tahapan
+    Route::get('/progress-stats', [App\Http\Controllers\Pusdatin\DashboardController::class, 'getProgressStats']);
+    
+    // Submissions dengan status kelayakan dokumen
+    Route::get('/submissions', [App\Http\Controllers\Pusdatin\PenilaianSLHD_Controller::class, 'getSubmissionsStatus']);
     
     // Penilaian SLHD
     Route::prefix('slhd')->controller(PenilaianSLHD_Controller::class)->group(function () {
@@ -162,12 +281,11 @@ Route::middleware(['auth:sanctum', 'role:pusdatin'])->prefix('pusdatin/penilaian
         Route::get('/{year}/dinas/{idDinas}', 'show');
     });
 
-    // Deadline Management
+    // Deadline Management (Submission only)
     Route::prefix('deadline')->controller(App\Http\Controllers\Pusdatin\DeadlineController::class)->group(function () {
-        Route::get('/{year?}', 'index');
-        Route::post('/set', 'setDeadline');
-        Route::delete('/{id}', 'deleteDeadline');
-        Route::get('/{year}/{stage}', 'getActiveDeadline');
+        Route::get('/{year?}', 'index'); // Get deadline submission
+        Route::post('/set', 'setDeadline'); // Set/update deadline submission
+        Route::delete('/{id}', 'deleteDeadline'); // Delete deadline
     });
 
     // Tahapan Penilaian Management

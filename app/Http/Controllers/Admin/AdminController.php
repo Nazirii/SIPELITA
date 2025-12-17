@@ -107,7 +107,7 @@ class AdminController extends Controller
         
         if($role !='pusdatin'){
 
-            $data = User::with('dinas.region')
+            $data = User::with('dinas.region.parent')
             ->whereNotIn('role', ['admin', 'pusdatin'])
             ->where('role', $role == "kabupaten" ? "kabupaten/kota" : $role)  
             ->where('is_active', $status)
@@ -123,11 +123,34 @@ class AdminController extends Controller
             ->orderBy('created_at', 'desc')
             ->paginate($perPage);
             
+            // Transform data untuk menambahkan nama provinsi dan kabupaten
+            $data->getCollection()->transform(function ($user) {
+                if ($user->dinas && $user->dinas->region) {
+                    $region = $user->dinas->region;
+                    
+                    // Jika region adalah provinsi (type = 'provinsi')
+                    if ($region->type === 'provinsi') {
+                        $user->province_name = $region->nama_wilayah ?? $region->nama_region;
+                        $user->regency_name = null;
+                    } 
+                    // Jika region adalah kabupaten/kota
+                    else {
+                        $user->regency_name = $region->nama_wilayah ?? $region->nama_region;
+                        // Ambil nama provinsi dari parent
+                        $user->province_name = $region->parent ? ($region->parent->nama_wilayah ?? $region->parent->nama_region) : null;
+                    }
+                }
+                
+                return $user;
+            });
+            
             return response()->json($data);
         }elseif($role=='pusdatin'){
-
+            // Convert status string ke boolean untuk is_active
+            $isActive = $status === 'approved' || $status === true || $status === '1';
+            
             $data = User::where('role', 'pusdatin')
-            ->where('is_active', $status)
+            ->where('is_active', $isActive)
             ->when($request->search, function($query, $search) {
                 return $query->where('email', 'like', "%{$search}%");
             })
@@ -139,23 +162,84 @@ class AdminController extends Controller
 
 
     }
- public function trackingHistoryPusdatin($year = null, $pusdatin_id = null)
+ public function trackingHistoryPusdatin(Request $request, $year = null, $pusdatin_id = null)
 {
+    // Support both path params and query params
+    $filterYear = $year ?? $request->query('year');
+    $filterPusdatinId = $pusdatin_id ?? $request->query('pusdatin_id');
+    
     $query = DB::table('pusdatin_logs')
-        ->orderByDesc('created_at');
+        ->leftJoin('users', 'pusdatin_logs.actor_id', '=', 'users.id')
+        ->select(
+            'pusdatin_logs.id',
+            'pusdatin_logs.year',
+            'pusdatin_logs.submission_id',
+            'pusdatin_logs.stage',
+            'pusdatin_logs.activity_type',
+            'pusdatin_logs.actor_id',
+            'pusdatin_logs.document_type',
+            'pusdatin_logs.status',
+            'pusdatin_logs.catatan',
+            'pusdatin_logs.created_at',
+            'users.email as actor_email'
+        )
+        ->orderByDesc('pusdatin_logs.created_at');
 
     // Filter tahun kalau ada
-    $query->when($year, function ($q) use ($year) {
-        $q->where('year', $year);
-    });
+    if ($filterYear) {
+        $query->where('pusdatin_logs.year', $filterYear);
+    }
 
     // Filter pusdatin_id kalau ada
-    $query->when($pusdatin_id, function ($q) use ($pusdatin_id) {
-        $q->where('actor_id', $pusdatin_id);
+    if ($filterPusdatinId) {
+        $query->where('pusdatin_logs.actor_id', $filterPusdatinId);
+    }
+
+    $logs = $query->get();
+    
+    // Transform ke format yang diharapkan frontend
+    $transformed = $logs->map(function ($log) {
+        return [
+            'id' => $log->id,
+            'user' => $log->actor_email ?? 'Pusdatin #' . $log->actor_id,
+            'role' => 'pusdatin',
+            'action' => $this->formatAction($log->activity_type, $log->document_type, $log->stage),
+            'target' => $log->document_type ?? $log->stage,
+            'time' => $log->created_at,
+            'status' => $log->status ?? 'info',
+            'catatan' => $log->catatan,
+            'submission_id' => $log->submission_id,
+            'year' => $log->year,
+        ];
     });
 
-    $data = $query->get();
+    return response()->json($transformed);
+}
 
-    return response()->json($data);
+private function formatAction($activityType, $documentType, $stage)
+{
+    $actions = [
+        'upload' => 'Upload',
+        'finalize' => 'Finalisasi',
+        'unfinalize' => 'Batal Finalisasi',
+        'approve' => 'Menyetujui',
+        'reject' => 'Menolak',
+        'review' => 'Review',
+    ];
+    
+    $action = $actions[$activityType] ?? ucfirst($activityType ?? 'Aksi');
+    
+    if ($documentType) {
+        $docNames = [
+            'iklh' => 'IKLH',
+            'penilaian_slhd' => 'Penilaian SLHD',
+            'penilaian_penghargaan' => 'Penilaian Penghargaan',
+        ];
+        $action .= ' ' . ($docNames[$documentType] ?? ucfirst($documentType));
+    } elseif ($stage) {
+        $action .= ' ' . ucfirst($stage);
+    }
+    
+    return $action;
 }
 }

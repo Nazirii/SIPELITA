@@ -125,7 +125,10 @@ class PenilaianPenghargaan_Controller extends Controller
     }
     
     public function getPenilaianPenghargaan(Request $request,$year){
-        $penilaian = PenilaianPenghargaan::where('year',$year)->orderByDesc('created_at')->get();
+        $penilaian = PenilaianPenghargaan::with('uploadedBy:id,email')
+            ->where('year',$year)
+            ->orderByDesc('created_at')
+            ->get();
         if(!$penilaian){
             return response()->json([
                 'message' => 'Penilaian Penghargaan untuk tahun '.$year.' tidak ditemukan.'
@@ -216,7 +219,7 @@ class PenilaianPenghargaan_Controller extends Controller
             'year' => $penilaianPenghargaan->year,
             'actor_id' => $request->user()->id,
             'stage' => 'penilaian_penghargaan',
-            'activity_type' => 'unfinalize',
+            'activity_type' => 'reopen',
             'document_type' => null,
             'catatan' => null,
             'status' =>'success'

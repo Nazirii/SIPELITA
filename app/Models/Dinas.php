@@ -11,6 +11,10 @@ class Dinas extends Model
     public function region(){
     return $this->belongsTo(Region::class, 'region_id');
     }
+    public function submissions()
+    {
+        return $this->hasMany(Submission::class, 'id_dinas');
+    }
     
 }
 

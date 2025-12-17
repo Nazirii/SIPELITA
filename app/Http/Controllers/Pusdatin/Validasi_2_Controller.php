@@ -23,7 +23,7 @@ class Validasi_2_Controller extends Controller
     public function index(Request $request, $year)
     {
         
-        $validasi2=Validasi2::where(['year'=>$year,'status'=>'finalized'])->first();
+        $validasi2=Validasi2::where(['year'=>$year])->first();
         if(!$validasi2){
             return response()->json([
                 'message'=>'Belum ada Validasi 2 yang sudah difinalisasi untuk tahun '.$year

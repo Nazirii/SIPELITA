@@ -86,6 +86,13 @@ class WawancaraController extends Controller
      */
     public function updateNilai(Request $request, Wawancara $wawancara)
     {
+        // Cek apakah sudah finalized
+        if ($wawancara->is_finalized) {
+            return response()->json([
+                'message' => 'Nilai wawancara sudah difinalisasi dan tidak dapat diubah'
+            ], 400);
+        }
+        
         $validatedData = $request->validate([
             'nilai_wawancara' => 'required|numeric|min:0|max:100',
             'catatan' => 'nullable|string'
@@ -120,6 +127,16 @@ class WawancaraController extends Controller
             ], 400);
         }
         
+        // Validasi: Semua nilai wawancara harus sudah terisi
+        $belumDiisi = $wawancara->whereNull('nilai_wawancara');
+        if ($belumDiisi->isNotEmpty()) {
+            $namaList = $belumDiisi->pluck('dinas.nama_dinas')->take(5)->join(', ');
+            return response()->json([
+                'message' => 'Tidak dapat finalisasi. Masih ada '.$belumDiisi->count().' dinas yang belum diisi nilai wawancara.',
+                'contoh_belum_diisi' => $namaList
+            ], 400);
+        }
+        
         // Update semua wawancara menjadi finalized
         Wawancara::where('year', $year)->update([
             'status' => 'finalized',
@@ -129,7 +146,21 @@ class WawancaraController extends Controller
         ]);
         
         // Update rekap penilaian (hitung total skor final)
-        app(\App\Services\RekapPenilaianService::class)->updateFromWawancara($year);
+        try {
+            app(\App\Services\RekapPenilaianService::class)->updateFromWawancara($year);
+        } catch (\Exception $e) {
+            // Rollback finalization if rekap update fails
+            Wawancara::where('year', $year)->update([
+                'status' => 'draft',
+                'is_finalized' => false,
+                'finalized_at' => null,
+                'finalized_by' => null
+            ]);
+            
+            return response()->json([
+                'message' => 'Gagal memfinalisasi wawancara: ' . $e->getMessage()
+            ], 500);
+        }
         
         // Update tahapan penilaian status (FINAL - SELESAI)
         $this->tahapanService->updateSetelahFinalize('wawancara', $year);

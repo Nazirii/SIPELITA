@@ -25,15 +25,15 @@ class GenerateTemplatePenilaianPenghargaan implements ShouldQueue
      */
     public function handle(ExcelService $excelService, SLHDService $slhdService): void
     {
-        $parsed=$this->penilaianSLHD->penilaianSLHDParsed()->where('status','parsed_ok')->get();
+        $parsed=$this->penilaianSLHD->penilaianSLHDParsed()->get();
         $eligible=[];
         $path="penilaian/template_penilaian_penghargaan_".$this->penilaianSLHD->year.".xlsx";
         $multiplier = [
-        'adiwiyata' => 90,
-        'proklim'   => 4,
-        'proper'    => 100,
+        'adiwiyata' => 4,
+        'proklim'   => 100,
+        'proper'    => 3,
         'kaltaparu' => 3,
-        'adipura'   => 3,
+        'adipura'   => 90,
     ];
     //seleksi
 

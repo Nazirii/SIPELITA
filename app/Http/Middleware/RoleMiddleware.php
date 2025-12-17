@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Symfony\Component\HttpFoundation\Response;
 
 class RoleMiddleware
@@ -19,8 +20,20 @@ class RoleMiddleware
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 
-        if (!in_array($request->user()->role, $roles)) {
-            return response()->json(['message' => 'Forbidden: Role not allowed'], 403);
+        $userRole = $request->user()->role;
+        Log::info('RoleMiddleware check', [
+            'user_id' => $request->user()->id,
+            'user_role' => $userRole,
+            'allowed_roles' => $roles,
+            'match' => in_array($userRole, $roles)
+        ]);
+
+        if (!in_array($userRole, $roles)) {
+            return response()->json([
+                'message' => 'Forbidden: Role not allowed',
+                'your_role' => $userRole,
+                'allowed_roles' => $roles
+            ], 403);
         }
         return $next($request);
     }

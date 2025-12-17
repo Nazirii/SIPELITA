@@ -51,28 +51,35 @@ class ReviewController extends Controller
         
         // Filter berdasarkan provinsi (parent region)
         if ($request->has('provinsi_id')) {
-            $query->whereRelation('dinas.region', 'parent_id', $request->provinsi_id)
-      ->orWhereRelation('dinas.region', 'id', $request->provinsi_id);
+            $query->whereHas('dinas.region', function($q) use ($request) {
+                $q->where('parent_id', $request->provinsi_id)
+                  ->orWhere('id', $request->provinsi_id);
+            });
         }
         
-        // Filter berdasarkan status submission
-        // if ($request->has('status')) {
-        //     $query->where('status', $request->status);
-        // }
+        // Filter berdasarkan type region (provinsi / kabupaten/kota)
+        if ($request->has('type')) {
+            $query->whereRelation('dinas.region', 'type', $request->type);
+        }
+        
+        // Filter berdasarkan kategori/tipologi region (kota_kecil, kabupaten_besar, etc)
+        if ($request->has('kategori')) {
+            $query->whereRelation('dinas.region', 'kategori', $request->kategori);
+        }
         
         // Search berdasarkan nama dinas atau nama region
-        // if ($request->has('search')) {
-        //     $search = $request->search;
-        //     $query->where(function($q) use ($search) {
-        //         $q->whereHas('dinas', function($subQ) use ($search) {
-        //             $subQ->where('nama_dinas', 'like', "%{$search}%")
-        //                  ->orWhere('kode_dinas', 'like', "%{$search}%");
-        //         })
-        //         ->orWhereHas('dinas.region', function($subQ) use ($search) {
-        //             $subQ->where('nama_region', 'like', "%{$search}%");
-        //         });
-        //     });
-        // }
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->whereHas('dinas', function($subQ) use ($search) {
+                    $subQ->where('nama_dinas', 'like', "%{$search}%")
+                         ->orWhere('kode_dinas', 'like', "%{$search}%");
+                })
+                ->orWhereHas('dinas.region', function($subQ) use ($search) {
+                    $subQ->where('nama_region', 'like', "%{$search}%");
+                });
+            });
+        }
         
         // Pagination dengan per_page yang bisa dikustomisasi
         $perPage = $request->input('per_page', 15);
@@ -223,25 +230,105 @@ class ReviewController extends Controller
             ]
         ]);
     }
+
+    /**
+     * Preview document inline (untuk iframe) - return file langsung
+     */
+    public function previewDocument(Submission $submission, string $documentType)
+    {
+        // Map document type
+        $document = null;
+        if ($documentType === 'ringkasan-eksekutif') {
+            $document = $submission->ringkasanEksekutif;
+        } elseif ($documentType === 'laporan-utama') {
+            $document = $submission->laporanUtama;
+        }
+
+        if (!$document) {
+            abort(404, 'Dokumen tidak ditemukan');
+        }
+
+        // Hanya dokumen yang finalized/approved bisa dipreview
+        if (!in_array($document->status, ['finalized', 'approved'])) {
+            abort(403, 'Dokumen belum bisa diakses');
+        }
+
+        $filePath = $document->path;
+        $disk = Storage::disk('dlh');
+        
+        if (!$disk->exists($filePath)) {
+            abort(404, 'File tidak ditemukan di storage');
+        }
+
+        @ob_clean();
+        
+        // Return file dengan Content-Disposition: inline (preview, bukan download)
+        return response()->file($disk->path($filePath), [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'inline; filename="' . basename($filePath) . '"',
+        ]);
+    }
+
+    /**
+     * Download document (force download)
+     */
+    public function downloadDocument(Submission $submission, string $documentType)
+    {
+        // Map document type
+        $document = null;
+        if ($documentType === 'ringkasan-eksekutif') {
+            $document = $submission->ringkasanEksekutif;
+        } elseif ($documentType === 'laporan-utama') {
+            $document = $submission->laporanUtama;
+        }
+
+        if (!$document) {
+            return response()->json([
+                'message' => 'Dokumen tidak ditemukan'
+            ], 404);
+        }
+
+        $filePath = $document->path;
+        $disk = Storage::disk('dlh');
+        
+        if (!$disk->exists($filePath)) {
+            return response()->json([
+                'message' => 'File tidak ditemukan di storage',
+                'path' => $filePath
+            ], 404);
+        }
+
+        @ob_clean();
+
+        $fileName = basename($filePath);
+        
+        // Download file - ikuti logic PenilaianSLHD_Controller
+        return Storage::disk('dlh')->download($filePath, $fileName, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+        ]);
+    }
     
     /**
      * Get detail Tabel Utama (collection) untuk review
+     * Return semua tabel termasuk draft untuk menampilkan status
      */
     public function showTabelUtama(Submission $submission){
-        // Hanya load tabel yang finalized/approved
-        $submission->load(['tabelUtama' => fn($q) => $q->whereIn('status', ['finalized', 'approved'])]);
+        // Load semua tabel (termasuk draft untuk ditampilkan sebagai disabled)
+        $submission->load(['tabelUtama', 'dinas.region']);
         $tabelUtama = $submission->tabelUtama;
         
         if ($tabelUtama->isEmpty()) {
             return response()->json([
-                'message' => 'Tabel Utama yang dapat direview belum tersedia untuk submission ini.'
+                'message' => 'Tabel Utama belum tersedia untuk submission ini.'
             ], 404);
         }
         
         // Transform dengan metadata file
         $documents = $tabelUtama->map(function($tabel) {
             $filePath = $tabel->path;
-            $fileExists = Storage::exists($filePath);
+            $disk = Storage::disk('dlh');
+            $fileExists = $filePath && $disk->exists($filePath);
             
             return [
                 'id' => $tabel->id,
@@ -249,11 +336,11 @@ class ReviewController extends Controller
                 'matra' => $tabel->matra,
                 'status' => $tabel->status,
                 'catatan_admin' => $tabel->catatan_admin,
-                'nama_file' => basename($filePath),
-                'ukuran_file' => $fileExists ? round(Storage::size($filePath) / 1048576, 2) . ' MB' : null,
-                'format_file' => strtoupper(pathinfo($filePath, PATHINFO_EXTENSION)),
+                'nama_file' => $filePath ? basename($filePath) : null,
+                'ukuran_file' => $fileExists ? round($disk->size($filePath) / 1048576, 2) . ' MB' : null,
+                'format_file' => $filePath ? strtoupper(pathinfo($filePath, PATHINFO_EXTENSION)) : null,
                 'tanggal_upload' => $tabel->created_at,
-                'download_url' => $fileExists ? Storage::url($filePath) : null,
+                'download_url' => $fileExists ? true : null, // just flag, actual download via separate endpoint
             ];
         });
         
@@ -270,6 +357,46 @@ class ReviewController extends Controller
     }
     
     /**
+     * Download single Tabel Utama file
+     */
+    public function downloadTabelUtama(Submission $submission, $tabelId)
+    {
+        $tabel = $submission->tabelUtama()->find($tabelId);
+        
+        if (!$tabel) {
+            return response()->json([
+                'message' => 'Tabel tidak ditemukan'
+            ], 404);
+        }
+        
+        // Hanya finalized/approved yang bisa didownload
+        if (!in_array($tabel->status, ['finalized', 'approved'])) {
+            return response()->json([
+                'message' => 'Tabel belum bisa diakses'
+            ], 403);
+        }
+        
+        $filePath = $tabel->path;
+        $disk = Storage::disk('dlh');
+        
+        if (!$disk->exists($filePath)) {
+            return response()->json([
+                'message' => 'File tidak ditemukan di storage',
+                'path' => $filePath
+            ], 404);
+        }
+        
+        @ob_clean();
+        
+        $fileName = basename($filePath);
+        
+        return Storage::disk('dlh')->download($filePath, $fileName, [
+            'Content-Type' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition' => 'attachment; filename="' . $fileName . '"',
+        ]);
+    }
+    
+    /**
      * Get IKLH data untuk review (per submission)
      * Menampilkan dokumen IKLH yang sudah finalized
      */
@@ -278,7 +405,7 @@ class ReviewController extends Controller
         
         $query = Submission::with([
             'dinas:id,nama_dinas,kode_dinas,region_id',
-            'dinas.region:id,nama_region,type,parent_id,kategori',
+            'dinas.region:id,nama_region,type,parent_id,kategori,has_pesisir',
             'dinas.region.parent:id,nama_region,type',
             'iklh' // load relasi iklh
         ])
@@ -292,6 +419,30 @@ class ReviewController extends Controller
             $query->whereHas('dinas.region', function($q) use ($request) {
                 $q->where('parent_id', $request->provinsi_id)
                   ->orWhere('id', $request->provinsi_id);
+            });
+        }
+        
+        // Filter berdasarkan type region (provinsi / kabupaten/kota)
+        if ($request->has('type')) {
+            $query->whereRelation('dinas.region', 'type', $request->type);
+        }
+        
+        // Filter berdasarkan kategori/tipologi region (kota_kecil, kabupaten_besar, etc)
+        if ($request->has('kategori')) {
+            $query->whereRelation('dinas.region', 'kategori', $request->kategori);
+        }
+        
+        // Search berdasarkan nama dinas atau nama region
+        if ($request->has('search') && !empty($request->search)) {
+            $search = $request->search;
+            $query->where(function($q) use ($search) {
+                $q->whereHas('dinas', function($subQ) use ($search) {
+                    $subQ->where('nama_dinas', 'like', "%{$search}%")
+                         ->orWhere('kode_dinas', 'like', "%{$search}%");
+                })
+                ->orWhereHas('dinas.region', function($subQ) use ($search) {
+                    $subQ->where('nama_region', 'like', "%{$search}%");
+                });
             });
         }
         
@@ -325,17 +476,29 @@ class ReviewController extends Controller
                 }
             }
             
+            // Hitung total IKLH: dibagi 4 jika tidak punya pesisir, dibagi 5 jika punya pesisir
+            $hasPesisir = $region?->has_pesisir ?? false;
+            $totalIndeks = 
+                ($iklh?->indeks_kualitas_air ?? 0) +
+                ($iklh?->indeks_kualitas_udara ?? 0) +
+                ($iklh?->indeks_kualitas_lahan ?? 0) +
+                ($hasPesisir ? ($iklh?->indeks_kualitas_pesisir_laut ?? 0) : 0) +
+                ($iklh?->indeks_kualitas_kehati ?? 0);
+            $totalIklh = $hasPesisir ? ($totalIndeks / 5) : ($totalIndeks / 4);
+            
             return [
                 'id' => $submission->id,
                 'provinsi' => $provinsi,
                 'kabupaten_kota' => $kabupatenKota ?? '-',
                 'jenis_dlh' => $pembagiandaerah,
                 'tipologi' => $region?->kategori ?? 'Daratan',
+                'has_pesisir' => $hasPesisir,
                 'indeks_kualitas_air' => $iklh?->indeks_kualitas_air,
                 'indeks_kualitas_udara' => $iklh?->indeks_kualitas_udara,
                 'indeks_kualitas_lahan' => $iklh?->indeks_kualitas_lahan,
                 'indeks_kualitas_pesisir_laut' => $iklh?->indeks_kualitas_pesisir_laut,
                 'indeks_kualitas_kehati' => $iklh?->indeks_kualitas_kehati,
+                'total_iklh' => round($totalIklh, 2),
                 'status' => $iklh?->status,
                 'catatan_admin' => $iklh?->catatan_admin,
             ];
